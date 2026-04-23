@@ -13,7 +13,7 @@ import (
 )
 
 // Connect to the combined stream endpoint; subscribe dynamically via SUBSCRIBE messages.
-var binanceWSURL = "wss://stream.binance.com:443/stream"
+var binanceWSURL = "wss://stream.binance.us:9443/stream"
 
 type Binance struct {
 	mu       sync.RWMutex
