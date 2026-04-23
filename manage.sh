@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="cryptoapi"
-CONTAINER="cryptoapi"
+IMAGE="crypto-price-api"
+CONTAINER="crypto-price-api"
 PORT="${CRYPTOAPI_PORT:-8080}"
 LOG_LINES="${LOG_LINES:-50}"
 
