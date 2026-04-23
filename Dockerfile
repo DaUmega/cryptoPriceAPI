@@ -13,7 +13,7 @@ RUN go mod download 2>/dev/null; true
 # Copy full source, then ensure go.sum is up-to-date before compiling.
 COPY . .
 RUN go mod tidy && \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /cryptoapi ./cmd/api
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /cryptoapi .
 
 # ── runtime stage ─────────────────────────────────────────────────────────────
 FROM scratch
