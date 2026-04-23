@@ -153,8 +153,11 @@ func (k *KuCoin) run(ctx context.Context) {
 			continue
 		}
 
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+		conn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 		if err != nil {
+			if resp != nil {
+				log.Printf("[kucoin] dial failed: HTTP %d %s", resp.StatusCode, resp.Status)
+			}
 			k.setState(Err, err.Error())
 			select {
 			case <-ctx.Done():

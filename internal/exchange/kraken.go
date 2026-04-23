@@ -91,8 +91,11 @@ func (k *Kraken) run(ctx context.Context) {
 		}
 		k.setState(Connecting, "")
 
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, krakenWSURL, nil)
+		conn, resp, err := websocket.DefaultDialer.DialContext(ctx, krakenWSURL, nil)
 		if err != nil {
+			if resp != nil {
+				log.Printf("[kraken] dial failed: HTTP %d %s", resp.StatusCode, resp.Status)
+			}
 			k.setState(Err, err.Error())
 			select {
 			case <-ctx.Done():

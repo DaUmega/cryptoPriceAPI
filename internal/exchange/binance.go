@@ -13,7 +13,7 @@ import (
 )
 
 // Connect to the combined stream endpoint; subscribe dynamically via SUBSCRIBE messages.
-var binanceWSURL = "wss://stream.binance.com:9443/stream"
+var binanceWSURL = "wss://stream.binance.com:443/stream"
 
 type Binance struct {
 	mu       sync.RWMutex
@@ -116,8 +116,11 @@ func (b *Binance) run(ctx context.Context) {
 		}
 		b.setState(Connecting, "")
 
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, binanceWSURL, nil)
+		conn, resp, err := websocket.DefaultDialer.DialContext(ctx, binanceWSURL, nil)
 		if err != nil {
+			if resp != nil {
+				log.Printf("[binance] dial failed: HTTP %d %s", resp.StatusCode, resp.Status)
+			}
 			b.setState(Err, err.Error())
 			select {
 			case <-ctx.Done():

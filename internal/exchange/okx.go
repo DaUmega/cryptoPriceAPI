@@ -99,8 +99,11 @@ func (o *OKX) run(ctx context.Context) {
 		}
 		o.setState(Connecting, "")
 
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, okxWSURL, nil)
+		conn, resp, err := websocket.DefaultDialer.DialContext(ctx, okxWSURL, nil)
 		if err != nil {
+			if resp != nil {
+				log.Printf("[okx] dial failed: HTTP %d %s", resp.StatusCode, resp.Status)
+			}
 			o.setState(Err, err.Error())
 			select {
 			case <-ctx.Done():

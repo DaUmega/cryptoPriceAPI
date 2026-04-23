@@ -95,8 +95,11 @@ func (b *Bybit) run(ctx context.Context) {
 		}
 		b.setState(Connecting, "")
 
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, bybitWSURL, nil)
+		conn, resp, err := websocket.DefaultDialer.DialContext(ctx, bybitWSURL, nil)
 		if err != nil {
+			if resp != nil {
+				log.Printf("[bybit] dial failed: HTTP %d %s", resp.StatusCode, resp.Status)
+			}
 			b.setState(Err, err.Error())
 			select {
 			case <-ctx.Done():

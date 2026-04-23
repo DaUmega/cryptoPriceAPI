@@ -90,8 +90,11 @@ func (c *Coinbase) run(ctx context.Context) {
 		}
 		c.setState(Connecting, "")
 
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, coinbaseWSURL, nil)
+		conn, resp, err := websocket.DefaultDialer.DialContext(ctx, coinbaseWSURL, nil)
 		if err != nil {
+			if resp != nil {
+				log.Printf("[coinbase] dial failed: HTTP %d %s", resp.StatusCode, resp.Status)
+			}
 			c.setState(Err, err.Error())
 			select {
 			case <-ctx.Done():
