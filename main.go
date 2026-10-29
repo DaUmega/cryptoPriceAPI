@@ -46,7 +46,7 @@ func (m *manager) ConnectedCount() int {
 }
 
 func main() {
-	port := flag.Int("port", 0, "port to listen on (default 8080, overrides ADDR env var)")
+	port := flag.Int("port", 0, "port to listen on (default 25777, overrides ADDR env var)")
 	flag.Parse()
 
 	addr := os.Getenv("ADDR")
@@ -54,7 +54,7 @@ func main() {
 	case *port != 0:
 		addr = fmt.Sprintf(":%d", *port)
 	case addr == "":
-		addr = ":8080"
+		addr = ":25777"
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -69,6 +69,9 @@ func main() {
 		exchange.NewBybit(),
 		exchange.NewOKX(),
 		exchange.NewKuCoin(),
+		exchange.NewBitstamp(),
+		exchange.NewGate(),
+		exchange.NewBitget(),
 	}
 
 	mgr := &manager{exchanges: exchanges}

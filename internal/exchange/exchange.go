@@ -2,6 +2,7 @@ package exchange
 
 import (
 	"context"
+	"math/rand"
 	"time"
 )
 
@@ -52,9 +53,10 @@ type Exchange interface {
 	Info() Info
 }
 
-func clampBackoff(d, max time.Duration) time.Duration {
+// backoff doubles d up to max, with jitter so all venues do not retry in lockstep.
+func backoff(d, max time.Duration) time.Duration {
 	if d > max {
 		return max
 	}
-	return d
+	return d/2 + time.Duration(rand.Int63n(int64(d/2+1)))
 }

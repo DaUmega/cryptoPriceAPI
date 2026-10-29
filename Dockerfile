@@ -22,6 +22,6 @@ COPY --from=builder /cryptoapi /cryptoapi
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Default port; override at runtime with -e ADDR=":PORT" or -port flag
-EXPOSE 8080
+EXPOSE 25777
 
 ENTRYPOINT ["/cryptoapi"]

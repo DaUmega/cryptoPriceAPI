@@ -4,93 +4,66 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-var kucoinRESTURL = "https://api.kucoin.com"
-
-type KuCoin struct {
-	mu       sync.RWMutex
-	writeMu  sync.Mutex
-	status   Status
-	lastErr  string
-	lastSeen time.Time
-	symbols  map[string]bool
-	out      chan Ticker
-	conn     *websocket.Conn
-}
-
-func NewKuCoin() *KuCoin {
-	return &KuCoin{
-		symbols: make(map[string]bool),
-		out:     make(chan Ticker, 1000),
+func NewKuCoin() *client {
+	var pingInterval time.Duration
+	c := newClient("kucoin", "", 50, func(syms []string) any {
+		ids := make([]string, len(syms))
+		for i, s := range syms {
+			ids[i] = s + "-USDT"
+		}
+		return struct {
+			ID    string `json:"id"`
+			Type  string `json:"type"`
+			Topic string `json:"topic,omitempty"`
+		}{ID: fmt.Sprintf("%d", time.Now().UnixMilli()), Type: "subscribe", Topic: "/market/snapshot:" + strings.Join(ids, ",")}
+	}, parseKuCoin)
+	c.dial = func(ctx context.Context) (*websocket.Conn, error) {
+		wsURL, pi, err := kucoinToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		pingInterval = pi
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+		return conn, err
 	}
-}
-
-func (k *KuCoin) Name() string           { return "kucoin" }
-func (k *KuCoin) Tickers() <-chan Ticker { return k.out }
-
-func (k *KuCoin) Info() Info {
-	k.mu.RLock()
-	defer k.mu.RUnlock()
-	return Info{
-		Name:      "kucoin",
-		Status:    k.status.String(),
-		LastError: k.lastErr,
-		LastSeen:  k.lastSeen,
-		Symbols:   len(k.symbols),
+	c.preRead = func(conn *websocket.Conn) error {
+		// KuCoin sends a welcome frame immediately after connect; discard it.
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("welcome: %w", err)
+		}
+		conn.SetReadDeadline(time.Time{})
+		return nil
 	}
-}
-
-func (k *KuCoin) toExchange(sym string) string { return sym + "-USDT" }
-
-func (k *KuCoin) fromExchange(s string) (string, bool) {
-	if !strings.HasSuffix(s, "-USDT") {
-		return "", false
+	c.ping = func() (any, time.Duration) {
+		return struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		}{ID: fmt.Sprintf("%d", time.Now().UnixMilli()), Type: "ping"}, pingInterval
 	}
-	return strings.TrimSuffix(s, "-USDT"), true
-}
-
-func (k *KuCoin) Start(ctx context.Context) error {
-	go k.run(ctx)
-	return nil
-}
-
-func (k *KuCoin) Subscribe(symbol string) error {
-	k.mu.Lock()
-	k.symbols[symbol] = true
-	conn := k.conn
-	k.mu.Unlock()
-	if conn != nil {
-		return k.sendSubscribe(conn, []string{symbol})
+	c.hook = func(conn *websocket.Conn, msg []byte) bool {
+		var in struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(msg, &in) != nil || in.Type != "ping" {
+			return false
+		}
+		_ = conn.WriteJSON(struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		}{ID: in.ID, Type: "pong"})
+		return true
 	}
-	return nil
-}
-
-type kucoinOut struct {
-	ID    string `json:"id"`
-	Type  string `json:"type"`
-	Topic string `json:"topic,omitempty"`
-}
-
-func (k *KuCoin) sendSubscribe(conn *websocket.Conn, symbols []string) error {
-	ids := make([]string, len(symbols))
-	for i, s := range symbols {
-		ids[i] = k.toExchange(s)
-	}
-	k.writeMu.Lock()
-	defer k.writeMu.Unlock()
-	return conn.WriteJSON(kucoinOut{
-		ID:    fmt.Sprintf("%d", time.Now().UnixMilli()),
-		Type:  "subscribe",
-		Topic: "/market/snapshot:" + strings.Join(ids, ","),
-	})
+	return c
 }
 
 type kucoinTokenResp struct {
@@ -104,9 +77,8 @@ type kucoinTokenResp struct {
 	} `json:"data"`
 }
 
-func (k *KuCoin) getToken(ctx context.Context) (wsURL string, pingInterval time.Duration, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		kucoinRESTURL+"/api/v1/bullet-public", http.NoBody)
+func kucoinToken(ctx context.Context) (string, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.kucoin.com/api/v1/bullet-public", http.NoBody)
 	if err != nil {
 		return "", 0, err
 	}
@@ -115,7 +87,6 @@ func (k *KuCoin) getToken(ctx context.Context) (wsURL string, pingInterval time.
 		return "", 0, err
 	}
 	defer resp.Body.Close()
-
 	var tr kucoinTokenResp
 	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
 		return "", 0, err
@@ -123,187 +94,47 @@ func (k *KuCoin) getToken(ctx context.Context) (wsURL string, pingInterval time.
 	if tr.Code != "200000" || len(tr.Data.InstanceServers) == 0 {
 		return "", 0, fmt.Errorf("kucoin: bad token response (code %s)", tr.Code)
 	}
-
 	srv := tr.Data.InstanceServers[0]
 	pi := time.Duration(srv.PingInterval) * time.Millisecond
 	if pi <= 0 {
 		pi = 18 * time.Second
 	}
-	url := fmt.Sprintf("%s?token=%s&connectId=%d", srv.Endpoint, tr.Data.Token, time.Now().UnixMilli())
-	return url, pi, nil
-}
-
-func (k *KuCoin) run(ctx context.Context) {
-	backoff := time.Second
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		k.setState(Connecting, "")
-
-		wsURL, pingInterval, err := k.getToken(ctx)
-		if err != nil {
-			k.setState(Err, err.Error())
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(backoff):
-				backoff = clampBackoff(backoff*2, 5*time.Minute)
-			}
-			continue
-		}
-
-		conn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
-		if err != nil {
-			if resp != nil {
-				log.Printf("[kucoin] dial failed: HTTP %d %s", resp.StatusCode, resp.Status)
-			}
-			k.setState(Err, err.Error())
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(backoff):
-				backoff = clampBackoff(backoff*2, 5*time.Minute)
-			}
-			continue
-		}
-		backoff = time.Second
-
-		// KuCoin sends a welcome frame immediately after connect; discard it.
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		if _, _, err := conn.ReadMessage(); err != nil {
-			conn.Close()
-			k.setState(Err, "welcome: "+err.Error())
-			continue
-		}
-		conn.SetReadDeadline(time.Time{})
-
-		k.mu.Lock()
-		k.conn = conn
-		syms := make([]string, 0, len(k.symbols))
-		for s := range k.symbols {
-			syms = append(syms, s)
-		}
-		k.mu.Unlock()
-		k.setState(Connected, "")
-		log.Printf("[kucoin] connected; subscribing to %d symbol(s)", len(syms))
-
-		for i := 0; i < len(syms); i += 50 {
-			end := i + 50
-			if end > len(syms) {
-				end = len(syms)
-			}
-			if err := k.sendSubscribe(conn, syms[i:end]); err != nil {
-				break
-			}
-		}
-
-		go k.pingLoop(ctx, conn, pingInterval)
-
-		if err := k.readLoop(ctx, conn); err != nil && ctx.Err() == nil {
-			k.setState(Err, err.Error())
-		}
-		conn.Close()
-		k.mu.Lock()
-		k.conn = nil
-		k.mu.Unlock()
-	}
-}
-
-func (k *KuCoin) pingLoop(ctx context.Context, conn *websocket.Conn, interval time.Duration) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			k.writeMu.Lock()
-			err := conn.WriteJSON(kucoinOut{
-				ID:   fmt.Sprintf("%d", time.Now().UnixMilli()),
-				Type: "ping",
-			})
-			k.writeMu.Unlock()
-			if err != nil {
-				return
-			}
-		}
-	}
+	return fmt.Sprintf("%s?token=%s&connectId=%d", srv.Endpoint, tr.Data.Token, time.Now().UnixMilli()), pi, nil
 }
 
 type kucoinIn struct {
-	ID    string          `json:"id"`
 	Type  string          `json:"type"`
 	Topic string          `json:"topic"`
 	Data  json.RawMessage `json:"data"`
 }
 
+// KuCoin snapshot payload is nested twice: outer data holds sequence
+// plus an inner "data" object with the ticker itself. That nesting is real,
+// verified live 2026-10-29, so the parser must keep it.
 type kucoinSnap struct {
 	Data struct {
 		Symbol          string  `json:"symbol"`
 		LastTradedPrice float64 `json:"lastTradedPrice"`
 		VolValue        float64 `json:"volValue"`
+		Vol             float64 `json:"vol"`
 	} `json:"data"`
 }
 
-func (k *KuCoin) readLoop(ctx context.Context, conn *websocket.Conn) error {
-	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-		conn.SetReadDeadline(time.Now().Add(40 * time.Second))
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			return err
-		}
-
-		k.mu.Lock()
-		k.lastSeen = time.Now()
-		k.mu.Unlock()
-
-		var in kucoinIn
-		if err := json.Unmarshal(raw, &in); err != nil {
-			continue
-		}
-
-		if in.Type == "ping" {
-			k.writeMu.Lock()
-			conn.WriteJSON(kucoinOut{ID: in.ID, Type: "pong"}) //nolint:errcheck
-			k.writeMu.Unlock()
-			continue
-		}
-		if in.Type != "message" || !strings.HasPrefix(in.Topic, "/market/snapshot:") {
-			continue
-		}
-
-		var snap kucoinSnap
-		if err := json.Unmarshal(in.Data, &snap); err != nil {
-			continue
-		}
-
-		sym, ok := k.fromExchange(snap.Data.Symbol)
-		if !ok {
-			continue
-		}
-		price := snap.Data.LastTradedPrice
-		vol := snap.Data.VolValue
-		if price <= 0 {
-			continue
-		}
-		select {
-		case k.out <- Ticker{Exchange: "kucoin", Symbol: sym, Price: price, Volume24h: vol, Timestamp: time.Now()}:
-		default:
-		}
+func parseKuCoin(msg []byte) []Ticker {
+	var in kucoinIn
+	if json.Unmarshal(msg, &in) != nil || in.Type != "message" || !strings.HasPrefix(in.Topic, "/market/snapshot:") {
+		return nil
 	}
-}
-
-func (k *KuCoin) setState(s Status, e string) {
-	k.mu.Lock()
-	k.status = s
-	if e != "" {
-		k.lastErr = e
+	var s kucoinSnap
+	if json.Unmarshal(in.Data, &s) != nil {
+		return nil
 	}
-	k.mu.Unlock()
+	if !strings.HasSuffix(s.Data.Symbol, "-USDT") {
+		return nil
+	}
+	vol := s.Data.VolValue
+	if vol <= 0 && s.Data.Vol > 0 {
+		vol = s.Data.Vol * s.Data.LastTradedPrice
+	}
+	return []Ticker{{Symbol: strings.TrimSuffix(s.Data.Symbol, "-USDT"), Price: s.Data.LastTradedPrice, Volume24h: vol}}
 }
-
-var _ Exchange = (*KuCoin)(nil)

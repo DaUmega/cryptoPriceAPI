@@ -1,8 +1,8 @@
 # cryptoPriceAPI
 
-Aggregates real-time crypto prices across 6 exchanges into a single REST API.
+Aggregates real-time crypto prices across 9 exchanges into a single REST API.
 
-Pulls live ticker data from Binance, Kraken, Coinbase, Bybit, OKX, and KuCoin simultaneously and returns a consolidated price with per-exchange breakdown.
+Pulls live ticker data from Binance, Kraken, Coinbase, Bybit, OKX, KuCoin, Bitstamp, Gate.io, and Bitget simultaneously and returns a consolidated price with per-exchange breakdown. Bitstamp has no ticker channel, so it contributes live trades (price only, weight 1).
 
 ---
 
@@ -78,7 +78,7 @@ Requires [Docker](https://docs.docker.com/get-docker/).
 ./manage.sh start
 ```
 
-The API will be available at `http://localhost:8080`.
+The API will be available at `http://localhost:25777`.
 
 ### manage.sh commands
 
@@ -101,7 +101,7 @@ purge      Stop and remove the container and image
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CRYPTOAPI_PORT` | Host port to bind | `8080` |
+| `CRYPTOAPI_PORT` | Host port to bind | `25777` |
 
 ```bash
 CRYPTOAPI_PORT=9090 ./manage.sh start
@@ -110,8 +110,8 @@ CRYPTOAPI_PORT=9090 ./manage.sh start
 ### Running without Docker
 
 ```bash
-go build -o cryptoapi ./cmd/api
-./cryptoapi -port 9090
+go build -o cryptoapi .
+./cryptoapi -port 25777
 ```
 
 The `-port` flag takes precedence over the `ADDR` environment variable.
